@@ -1,81 +1,103 @@
 const User = require("../models/user");
 const bcrypt = require("bcryptjs");
 const transporter = require("../config/mailer");
+const jwt = require("jsonwebtoken");
+const CustomError = require("../utils/custom-errror");
 
-registerUser = async (req, res) => {
-  const { name,    email, password } = req.body;
+// 🔐 Helper: Create JWT token
+const createToken = (user) => {
+  return jwt.sign(
+    {  email: user.email },
+    process.env.JWT_SECRET,
+    { expiresIn: "1h" }
+  );
+};
+
+// 📩 Helper: Send confirmation email
+const sendConfirmationEmail = async (email, name) => {
+  const mailOptions = {
+    from: process.env.EMAIL_USER,
+    to: email,
+    subject: "Registration Successful",
+    text: `Hi ${name},\n\nThank you for registering with us!`,
+  };
 
   try {
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser)
-      return res.status(400).json({ message: "Email already registered" });
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Save user to DB
-    const user = new User({ name, email, password: hashedPassword });
-    await user.save();
-
-    // Send confirmation email
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: "Registration Successful",
-      text: `Hi ${user.name},\n\nThank you for registering with us!`,
-    };
-
-    transporter.sendMail(mailOptions, (err, info) => {
-      if (err) {
-        console.error("Email send failed:", err);
-      } else {
-        console.log("Email sent:", info.response);
-      }
-    });
-
-    res
-      .status(201)
-      .json({ message: "User registered successfully and email sent" });
+    await transporter.sendMail(mailOptions);
+    console.log("Email sent successfully");
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Failed to send email:", err.message);
   }
 };
 
-loginUser = async (req, res) => {
+// ✅ Register User
+const registerUser = async (req, res, next) => {
+  const { userName, email, password } = req.body;
+
+  try {
+    if (!userName || !email || !password) {
+      throw new CustomError("Name, email, and password are required", 400);
+    }
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+     throw new CustomError("User already exists with this email", 400);
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ userName, email, password: hashedPassword });
+    await user.save();
+
+    await sendConfirmationEmail(email, userName);
+
+    res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+    });
+  } catch (err) {
+    next(err); // Global error handler
+  }
+};
+
+// ✅ Login User
+
+
+const loginUser = async (req, res, next) => {
   const { email, password } = req.body;
 
   try {
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ message: "Please enter both email and password" });
+      throw new CustomError("Email and password are required", 400);
     }
 
     const user = await User.findOne({ email });
-
     if (!user) {
-      return res.status(400).json({ message: "Invalid email or password" });
+      throw new CustomError("Invalid email or password", 400);
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
-
     if (!isMatch) {
-      return res.status(400).json({ message: "Invalid email or password" });
+      throw new CustomError("Invalid email or password", 400);
     }
 
-    // Optional: You can return user or a token here
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+      expiresIn: "1h",
+    });
+
     res.status(200).json({
+      success: true,
       message: "Login successful",
+      token,
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
-      }
+      },
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 };
 
-module.exports = { registerUser , loginUser};
+
+module.exports = { registerUser, loginUser };
